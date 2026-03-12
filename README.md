@@ -28,7 +28,7 @@ services:
       - caddy-cf
     environment:
       - CLOUDFLARE_API_TOKEN=CF_TOKEN
-      #- DESEC_TOKEN=deSEC_Token
+      - DESEC_TOKEN=deSEC_Token
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile
       - ./html:/srv
