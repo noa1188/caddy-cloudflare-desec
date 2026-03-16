@@ -1,20 +1,26 @@
 name: Build and Push Custom Caddy
 
 on:
+  schedule:
+    - cron: '2 0 * * *'  # 每天 UTC 时间 0点（北京时间早8点）自动运行检查
   push:
     branches: 
       - main 
     tags: 
       - 'v*.*.*' 
-  workflow_dispatch: 
+  workflow_dispatch:  # 允许手动在网页端点击运行
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    
+    permissions:
+      contents: write  # 必须添加此权限，允许机器人把新版本号写回你的仓库
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -30,12 +36,41 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # 新增步骤：从 Dockerfile 中提取 CADDY_VERSION
-      - name: Get Caddy Version from Dockerfile
-        id: caddy_version
+      # 核心自动化步骤：检查版本、替换 Dockerfile 并自动提交
+      - name: Check and Update Caddy Version
+        id: version_check
         run: |
-          VERSION=$(grep -oP '(?<=ARG CADDY_VERSION=).*' Dockerfile)
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          # 1. 获取当前 Dockerfile 中的版本
+          CURRENT_VERSION=$(grep -oP '(?<=ARG CADDY_VERSION=).*' Dockerfile)
+          echo "Current version in Dockerfile: $CURRENT_VERSION"
+          
+          # 2. 获取 Docker Hub 官方最新的纯数字版本号
+          LATEST_VERSION=$(curl -s https://registry.hub.docker.com/v2/repositories/library/caddy/tags?page_size=100 | jq -r '.results[].name' | grep -E "^[0-9]+\.[0-9]+\.[0-9]+$" | sort -V | tail -n 1)
+          echo "Latest Caddy version on Docker Hub: $LATEST_VERSION"
+          
+          if [ -z "$LATEST_VERSION" ]; then
+            echo "Failed to fetch latest version."
+            exit 1
+          fi
+          
+          # 3. 对比版本，如果有更新则修改 Dockerfile 并提交
+          if [ "$CURRENT_VERSION" != "$LATEST_VERSION" ]; then
+            echo "New version detected! Updating Dockerfile..."
+            sed -i "s/ARG CADDY_VERSION=$CURRENT_VERSION/ARG CADDY_VERSION=$LATEST_VERSION/" Dockerfile
+            
+            # 配置 git 机器人并提交更改
+            git config --local user.email "github-actions[bot]@users.noreply.github.com"
+            git config --local user.name "github-actions[bot]"
+            git add Dockerfile
+            # [skip ci] 可防止这次 push 再次触发 Github Actions 导致死循环
+            git commit -m "chore: auto-bump Caddy version to $LATEST_VERSION [skip ci]"
+            git push
+            
+            echo "VERSION=$LATEST_VERSION" >> $GITHUB_ENV
+          else
+            echo "Version is up to date. Proceeding with current version."
+            echo "VERSION=$CURRENT_VERSION" >> $GITHUB_ENV
+          fi
 
       - name: Extract metadata for Docker
         id: meta
@@ -56,5 +91,9 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # 注入最新的版本号给 Dockerfile
+          build-args: |
+            CADDY_VERSION=${{ env.VERSION }}
+          # 保留了你的缓存优化策略，加速编译
           cache-from: type=gha
           cache-to: type=gha,mode=max
