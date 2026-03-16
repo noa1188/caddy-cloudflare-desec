@@ -30,13 +30,21 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # 新增步骤：从 Dockerfile 中提取 CADDY_VERSION
+      - name: Get Caddy Version from Dockerfile
+        id: caddy_version
+        run: |
+          VERSION=$(grep -oP '(?<=ARG CADDY_VERSION=).*' Dockerfile)
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
       - name: Extract metadata for Docker
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ secrets.DOCKERHUB_USERNAME }}/caddy-cloudflare-desec-webdav
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/caddy-build
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ env.VERSION }}
             type=ref,event=tag
             type=sha,format=short
 
